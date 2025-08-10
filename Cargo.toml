@@ -1,0 +1,6 @@
+[package]
+name = "csv-helper"
+version = "0.1.0"
+
+[dependencies]
+memmap2 = "0.9.7"
