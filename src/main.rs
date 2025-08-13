@@ -40,12 +40,8 @@ fn copy_csv_only_column(
     let mut count: usize = 0;
     let mut current_column_idx: u32 = 0;
 
-    //let mut index_head_ptr: *const u8 = input_ptr;
     let mut index_head_count: usize = 0;
 
-    // read the first row, must be the header row.
-
-    index_head_count = 0;
 
     let mut current_row: FileCSVRow<u32> = FileCSVRow {
         head: (input_ptr as usize),
@@ -91,7 +87,7 @@ fn copy_csv_only_column(
             if is_header_row {
                 is_header_row = false;
                 header_row = current_row.clone();
-            } else if (indices_map.contains_key(&current_row.index_value)) {
+            } else if indices_map.contains_key(&current_row.index_value) {
                 indices_map
                     .get_mut(&current_row.index_value)
                     .unwrap()
@@ -176,7 +172,7 @@ fn main() {
     }
     let input_file: File = res.unwrap();
 
-    let output_directory = "./test/parts/";
+    let output_directory = OUTPUT_FILE_DIR;
     let column_index = 0;
 
     let copy_result = copy_csv_only_column(

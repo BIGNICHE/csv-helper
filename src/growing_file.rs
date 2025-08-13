@@ -1,7 +1,6 @@
 extern crate memmap2;
-use memmap2::{Mmap, MmapMut, MmapOptions};
-use std::fs::{File, OpenOptions};
-use std::slice;
+use memmap2::{MmapMut, MmapOptions};
+use std::fs::{File};
 
 pub struct GrowingFile {
     current_capacity: usize,
@@ -39,16 +38,6 @@ impl GrowingFile {
         self.current_size += len;
 
         return Ok(len);
-    }
-
-    pub fn write_n_from_slice(&mut self, input: &[u8]) -> std::io::Result<usize> {
-        let length = input.len();
-        if self.current_size + length >= self.current_capacity {
-            self.grow(self.current_size + length)?;
-        }
-        self.mmap[self.current_size..self.current_size + length].copy_from_slice(input);
-        self.current_size += length;
-        return Ok(length);
     }
 
     fn grow(&mut self, requested_size: usize) -> std::io::Result<usize> {
