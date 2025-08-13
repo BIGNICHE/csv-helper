@@ -1,38 +1,32 @@
 mod growing_file;
 
 extern crate memmap2;
-use memmap2::{Mmap, MmapMut, MmapOptions};
+use memmap2::Mmap;
 use std::io;
-use std::ptr::slice_from_raw_parts;
-use std::slice;
 use std::str::from_utf8;
-use std::sync::Mutex;
 use std::{
     collections::HashMap,
     fs::{File, OpenOptions},
+    thread,
     time::Instant,
 };
 
 use growing_file::GrowingFile;
 
-//const INPUT_FILE_PATH: &str = "test/whole/Paterson_Regional_A1_MagLev_DC_r1_voxet.csv";
-const INPUT_FILE_PATH: &str = "test/whole/ex.csv";
+const INPUT_FILE_PATH: &str = "test/whole/Paterson_Regional_A1_MagLev_DC_r1_voxet.csv";
+//const INPUT_FILE_PATH: &str = "test/whole/ex.csv";
 const OUTPUT_FILE_DIR: &str = "./test/parts/";
 
+#[derive(Clone)]
 struct FileCSVRow<T> {
-    head: *const u8,
+    head: usize,
     len: usize,
     index_value: T,
 }
 
-struct OutputCSVFile {
-    head: Mutex<*mut u8>,
-    rows: Vec<FileCSVRow<u32>>,
-    len: usize,
-}
-
 fn copy_csv_only_column(
     input_file: File,
+    input_name: &str,
     output_directory: &str,
     column_index: u32,
 ) -> io::Result<usize> {
@@ -51,29 +45,30 @@ fn copy_csv_only_column(
 
     // read the first row, must be the header row.
 
-
-
-
     index_head_count = 0;
 
-    let mut csv_rows: Vec<FileCSVRow<u32>> = Vec::new();
     let mut current_row: FileCSVRow<u32> = FileCSVRow {
-        head: (input_ptr),
+        head: (input_ptr as usize),
+        len: 0,
+        index_value: (0),
+    };
+    let mut header_row: FileCSVRow<u32> = FileCSVRow {
+        head: (input_ptr as usize),
         len: 0,
         index_value: (0),
     };
 
     let mut row_start_count: usize = count;
 
-    let indices_map: HashMap<u32, OutputCSVFile> = HashMap::new();
+    let mut indices_map: HashMap<u32, Vec<FileCSVRow<u32>>> = HashMap::new();
 
-    let mut header_row: bool = true;
+    let mut is_header_row: bool = true;
 
     while count < content_size {
         // scan for \n
         // and idx column.
 
-        if ((content[count] == b',') || (content[count] == b'\n')) && !header_row {
+        if ((content[count] == b',') || (content[count] == b'\n')) && !is_header_row {
             if current_column_idx == column_index {
                 let index_bytes = &content[index_head_count..count];
                 let index_utf8: &str = from_utf8(index_bytes).unwrap();
@@ -88,17 +83,26 @@ fn copy_csv_only_column(
             }
         }
 
-        if (content[count] == b'\n') || (count == content_size - 1) { // count == content_size checks for eof
+        if (content[count] == b'\n') || (count == content_size - 1) {
+            // count == content_size checks for eof
             // newline
             current_row.len = count - row_start_count;
 
-            if header_row {
-                header_row  = false;
+            if is_header_row {
+                is_header_row = false;
+                header_row = current_row.clone();
+            } else if (indices_map.contains_key(&current_row.index_value)) {
+                indices_map
+                    .get_mut(&current_row.index_value)
+                    .unwrap()
+                    .push(current_row);
+            } else {
+                indices_map.insert(current_row.index_value, vec![current_row]);
             }
 
-            csv_rows.push(current_row);
+            //csv_rows.push(current_row);
             current_row = FileCSVRow {
-                head: (input_ptr.wrapping_add(count + 1)),
+                head: (input_ptr.wrapping_add(count + 1)) as usize,
                 len: 0,
                 index_value: (0),
             };
@@ -110,67 +114,57 @@ fn copy_csv_only_column(
         count += 1;
     }
 
-    // now we have all the meta required to copy these rows out.
+    let output_size_guess: usize = content_size / indices_map.len();
+    let mut handles = vec![];
 
-    let mut output_file_path = String::from(OUTPUT_FILE_DIR);
-    output_file_path.push_str("output.csv");
+    for index_tuple in indices_map {
+        // make the file.
+        let iname = input_name.to_string();
+        let ioutput_dir = output_directory.to_string();
+        let header_copy = header_row.clone();
 
-    let res = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(output_file_path.clone());
-
-    if !res.is_ok() {
-        println!("Create output file failure {}", output_file_path.clone());
-        return Err(res.unwrap_err());
+        let index = index_tuple.0;
+        let output_file_path = String::from(&format!(
+            "{}{}_IL{}.csv",
+            ioutput_dir,
+            iname,
+            index.to_string()
+        ));
+        let output_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&output_file_path)
+            .unwrap();
+        handles.push(thread::spawn(move || {
+        let mut output_growing_file =
+            GrowingFile::new(output_file, output_size_guess.clone() as u64).unwrap();
+        output_growing_file
+            .write_n_from_ptr(header_copy.head, header_copy.len)
+            .unwrap();
+        
+        for row in index_tuple.1 {
+            output_growing_file
+                .write_n_from_ptr(row.head, row.len)
+                .unwrap();
+        }
+        output_growing_file.close().unwrap();
+        }));
     }
 
-    let output_file = res.unwrap();
+    for handle in handles {
+        handle.join().unwrap();
+    }
 
-    let mut output_growing_file = GrowingFile::new(output_file, 1638400)?;
-
-    //let header_slice = input_mmap.get(0..header_row.len).unwrap(); // TODO: handle this possible error
     /*
-    let mut input_idx: usize = 0;
-    input_idx += output_growing_file
-        .write_n_from_ptr(input_ptr as *mut u8, header_row.len)
-        .unwrap();
-    */
     for row in csv_rows {
         output_growing_file
             .write_n_from_ptr(row.head as *mut u8, row.len)
             .unwrap();
-
-        //input_idx += row.len;
-
-        //let data = input_mmap.get(input_idx..input_idx+row.len).unwrap(); // TODO handle option
-        //input_idx += output_growing_file.write_n_from_slice(data).unwrap();
-    }
-
-
-    /*
-    output_file.set_len(count as u64)?;
-
-    let mut output_mmap = MmapOptions::new().map_mut(&output_file).unwrap();
-
-    // write header row
-
-    let mut output_head = output_mmap.as_mut_ptr();
-
-    std::ptr::copy_nonoverlapping(input_ptr, output_head, header_row.len);
-    output_head = output_head.wrapping_add(header_row.len);
-    let mut input_count = header_row.len;
-
-    for row in csv_rows {
-        std::ptr::copy_nonoverlapping(input_ptr.wrapping_add(input_count), output_head, row.len);
-        input_count += row.len;
-        output_head = output_head.wrapping_add(row.len);
     }
      */
 
-    //return Ok(csv_rows.len() * std::mem::size_of::<FileCSVRow<u32>>());
-    return Ok(output_growing_file.close().unwrap());
+    return Ok(content_size);
 }
 
 fn main() {
@@ -181,27 +175,16 @@ fn main() {
         return;
     }
     let input_file: File = res.unwrap();
-    let mut output_file_path: String = String::from(OUTPUT_FILE_DIR);
-    output_file_path.push_str("output.csv");
-    //let res = File::create(output_file_path.clone());
 
-    let res = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(output_file_path.clone());
-
-    if !res.is_ok() {
-        println!("Create output file failure {}", output_file_path.clone());
-        return;
-    }
-    let output_file: File = res.unwrap();
-
-    //let copy_result = copy_csv(input_file, output_file);
     let output_directory = "./test/parts/";
     let column_index = 0;
 
-    let copy_result = unsafe { copy_csv_only_column(input_file, output_directory, column_index) };
+    let copy_result = copy_csv_only_column(
+        input_file,
+        "Paterson_Regional_A1_MagLev_DC_r1_voxet",
+        output_directory,
+        column_index,
+    );
 
     let elapsed_time = now.elapsed();
 

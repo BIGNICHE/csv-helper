@@ -11,9 +11,9 @@ pub struct GrowingFile {
 }
 
 impl GrowingFile {
-    pub fn new(mut file: File, initial_capacity: u64) -> Result<GrowingFile, std::io::Error> {
+    pub fn new(file: File, initial_capacity: u64) -> Result<GrowingFile, std::io::Error> {
         file.set_len(initial_capacity)?;
-        let mut mmap = unsafe { MmapOptions::new().map_mut(&file)? };
+        let mmap = unsafe { MmapOptions::new().map_mut(&file)? };
 
         return Ok(Self {
             current_capacity: initial_capacity as usize,
@@ -23,7 +23,7 @@ impl GrowingFile {
         });
     }
 
-    pub fn write_n_from_ptr(&mut self, src: *mut u8, len: usize) -> std::io::Result<usize> {
+    pub fn write_n_from_ptr(&mut self, src:  usize, len: usize) -> std::io::Result<usize> {
         // Grow if needed
         if self.current_size + len >= self.current_capacity {
             self.grow(self.current_size + len)?;
@@ -31,7 +31,7 @@ impl GrowingFile {
 
         unsafe {
             std::ptr::copy_nonoverlapping(
-                src,
+                src as *mut u8,
                 self.mmap.as_mut_ptr().wrapping_add(self.current_size),
                 len,
             )
