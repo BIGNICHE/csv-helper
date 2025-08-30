@@ -30,36 +30,88 @@ fn copy_csv_only_column(
     output_directory: &str,
     column_index: u32,
 ) -> io::Result<usize> {
-    let input_mmap: Mmap = unsafe { Mmap::map(&input_file).unwrap() };
+    let input_mmap: Mmap = unsafe { Mmap::map(&input_file)? };
     let content: &[u8] = &input_mmap[..];
     let content_size = content.len();
     let input_ptr: *const u8 = input_mmap.as_ptr();
 
-    // reading process can be chunked here.
-    // right now single thread.
-    let mut count: usize = 0;
-    let mut current_column_idx: u32 = 0;
+    let (header_row, indices_map) =
+        create_file_index(column_index, &content, content_size, input_ptr);
 
-    let mut index_head_count: usize = 0;
+    let output_size_guess: usize = content_size / indices_map.len(); // Initial file size for the output growing files.
+    let mut handles = vec![];
 
+    for index_tuple in indices_map {
+        // make the file.
+        let iname = input_name.to_string();
+        let ioutput_dir = output_directory.to_string();
+        let header_copy = header_row.clone();
 
+        let index = index_tuple.0;
+        let output_file_path = String::from(&format!(
+            "{}{}_IL{}.csv",
+            ioutput_dir,
+            iname,
+            index.to_string()
+        ));
+        let output_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&output_file_path)?;
+        handles.push(thread::spawn(move || {
+            let mut output_growing_file =
+                GrowingFile::new(output_file, output_size_guess.clone() as u64).unwrap();
+            output_growing_file
+                .write_n_from_ptr(header_copy.head, header_copy.len)
+                .unwrap();
+
+            for row in index_tuple.1 {
+                output_growing_file
+                    .write_n_from_ptr(row.head, row.len)
+                    .unwrap();
+            }
+            output_growing_file.close().unwrap();
+        }));
+    }
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    /*
+    for row in csv_rows {
+        output_growing_file
+            .write_n_from_ptr(row.head as *mut u8, row.len)
+            .unwrap();
+    }
+     */
+
+    Ok(content_size)
+}
+
+fn create_file_index(
+    column_index: u32,
+    content: &&[u8],
+    content_size: usize,
+    input_ptr: *const u8,
+) -> (FileCSVRow<u32>, HashMap<u32, Vec<FileCSVRow<u32>>>) {
+    let mut indices_map: HashMap<u32, Vec<FileCSVRow<u32>>> = HashMap::new();
     let mut current_row: FileCSVRow<u32> = FileCSVRow {
-        head: (input_ptr as usize),
+        head: input_ptr as usize,
         len: 0,
-        index_value: (0),
+        index_value: 0,
     };
     let mut header_row: FileCSVRow<u32> = FileCSVRow {
-        head: (input_ptr as usize),
+        head: input_ptr as usize,
         len: 0,
-        index_value: (0),
+        index_value: 0,
     };
-
-    let mut row_start_count: usize = count;
-
-    let mut indices_map: HashMap<u32, Vec<FileCSVRow<u32>>> = HashMap::new();
-
-    let mut is_header_row: bool = true;
-
+    let mut count: usize = 0;
+    let mut current_column_idx = 0;
+    let mut index_head_count = 0;
+    let mut is_header_row = true;
+    let mut row_start_count = 0;
     while count < content_size {
         // scan for \n
         // and idx column.
@@ -95,12 +147,10 @@ fn copy_csv_only_column(
             } else {
                 indices_map.insert(current_row.index_value, vec![current_row]);
             }
-
-            //csv_rows.push(current_row);
             current_row = FileCSVRow {
-                head: (input_ptr.wrapping_add(count + 1)) as usize,
+                head: input_ptr.wrapping_add(count + 1) as usize,
                 len: 0,
-                index_value: (0),
+                index_value: 0,
             };
             index_head_count = count + 1;
             current_column_idx = 0;
@@ -110,57 +160,7 @@ fn copy_csv_only_column(
         count += 1;
     }
 
-    let output_size_guess: usize = content_size / indices_map.len();
-    let mut handles = vec![];
-
-    for index_tuple in indices_map {
-        // make the file.
-        let iname = input_name.to_string();
-        let ioutput_dir = output_directory.to_string();
-        let header_copy = header_row.clone();
-
-        let index = index_tuple.0;
-        let output_file_path = String::from(&format!(
-            "{}{}_IL{}.csv",
-            ioutput_dir,
-            iname,
-            index.to_string()
-        ));
-        let output_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&output_file_path)
-            .unwrap();
-        handles.push(thread::spawn(move || {
-        let mut output_growing_file =
-            GrowingFile::new(output_file, output_size_guess.clone() as u64).unwrap();
-        output_growing_file
-            .write_n_from_ptr(header_copy.head, header_copy.len)
-            .unwrap();
-        
-        for row in index_tuple.1 {
-            output_growing_file
-                .write_n_from_ptr(row.head, row.len)
-                .unwrap();
-        }
-        output_growing_file.close().unwrap();
-        }));
-    }
-
-    for handle in handles {
-        handle.join().unwrap();
-    }
-
-    /*
-    for row in csv_rows {
-        output_growing_file
-            .write_n_from_ptr(row.head as *mut u8, row.len)
-            .unwrap();
-    }
-     */
-
-    return Ok(content_size);
+    (header_row, indices_map)
 }
 
 fn main() {
