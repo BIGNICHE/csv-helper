@@ -24,7 +24,7 @@ struct FileCSVRow<T> {
     index_value: T,
 }
 
-fn copy_csv_only_column(
+fn split_csv_by_column(
     input_file: File,
     input_name: &str,
     output_directory: &str,
@@ -92,14 +92,6 @@ fn copy_csv_only_column(
     for handle in workers {
         handle.join().unwrap();
     }
-
-    /*
-    for row in csv_rows {
-        output_growing_file
-            .write_n_from_ptr(row.head as *mut u8, row.len)
-            .unwrap();
-    }
-     */
 
     Ok(content_size)
 }
@@ -189,7 +181,7 @@ fn main() {
     let output_directory = OUTPUT_FILE_DIR;
     let column_index = 0;
 
-    let copy_result = copy_csv_only_column(
+    let copy_result = split_csv_by_column(
         input_file,
         "Paterson_Regional_A1_MagLev_DC_r1_voxet",
         output_directory,
