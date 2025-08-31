@@ -1,20 +1,20 @@
 mod growing_file;
 
 extern crate memmap2;
+use growing_file::GrowingFile;
 use memmap2::Mmap;
 use std::io;
 use std::str::from_utf8;
+use std::sync::Mutex;
 use std::{
     collections::HashMap,
     fs::{File, OpenOptions},
+    sync::Arc,
     thread,
     time::Instant,
 };
 
-use growing_file::GrowingFile;
-
-const INPUT_FILE_PATH: &str = "test/whole/Paterson_Regional_A1_MagLev_DC_r1_voxet.csv";
-//const INPUT_FILE_PATH: &str = "test/whole/ex.csv";
+const INPUT_FILE_PATH: &str = "test/whole/ex_large.csv";
 const OUTPUT_FILE_DIR: &str = "./test/parts/";
 
 #[derive(Clone)]
@@ -38,44 +38,58 @@ fn copy_csv_only_column(
     let (header_row, indices_map) =
         create_file_index(column_index, &content, content_size, input_ptr);
 
-    let output_size_guess: usize = content_size / indices_map.len(); // Initial file size for the output growing files.
-    let mut handles = vec![];
+    let iter_indices = indices_map.into_iter();
 
-    for index_tuple in indices_map {
-        // make the file.
+    let output_size_guess: usize = content_size / iter_indices.len(); // Initial file size for the output growing files.
+
+    let arc_iter = Arc::new(Mutex::new(iter_indices));
+
+    let mut workers = vec![];
+
+    for _i in 0..24 {
+        // copy setup required
+        let iterator = Arc::clone(&arc_iter);
         let iname = input_name.to_string();
         let ioutput_dir = output_directory.to_string();
         let header_copy = header_row.clone();
+        workers.push(thread::spawn(move || {
+            loop {
+                let nxt = iterator.lock().unwrap().next(); // should unblock
+                if nxt.is_none() {
+                    return;
+                }
+                let index_tuple = nxt.unwrap();
+                // make the file.
+                let index = index_tuple.0;
+                let output_file_path = String::from(&format!(
+                    "{}{}_IL{}.csv",
+                    ioutput_dir,
+                    iname,
+                    index.to_string()
+                ));
+                let output_file = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .open(&output_file_path).unwrap();
 
-        let index = index_tuple.0;
-        let output_file_path = String::from(&format!(
-            "{}{}_IL{}.csv",
-            ioutput_dir,
-            iname,
-            index.to_string()
-        ));
-        let output_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&output_file_path)?;
-        handles.push(thread::spawn(move || {
-            let mut output_growing_file =
-                GrowingFile::new(output_file, output_size_guess.clone() as u64).unwrap();
-            output_growing_file
-                .write_n_from_ptr(header_copy.head, header_copy.len)
-                .unwrap();
-
-            for row in index_tuple.1 {
+                let mut output_growing_file =
+                    GrowingFile::new(output_file, output_size_guess.clone() as u64).unwrap();
                 output_growing_file
-                    .write_n_from_ptr(row.head, row.len)
+                    .write_n_from_ptr(header_copy.head, header_copy.len)
                     .unwrap();
+
+                for row in index_tuple.1 {
+                    output_growing_file
+                        .write_n_from_ptr(row.head, row.len)
+                        .unwrap();
+                }
+                output_growing_file.close().unwrap();
             }
-            output_growing_file.close().unwrap();
         }));
     }
 
-    for handle in handles {
+    for handle in workers {
         handle.join().unwrap();
     }
 
@@ -127,7 +141,7 @@ fn create_file_index(
             current_column_idx += 1;
 
             if current_column_idx == column_index {
-                index_head_count = count;
+                index_head_count = count + 1; // Add 1 for the comma.
             }
         }
 
