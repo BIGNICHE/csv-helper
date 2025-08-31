@@ -65,11 +65,3 @@ impl GrowingFile {
         return Ok(self.current_size);
     }
 }
-/*
-impl Drop for GrowingFile {
-    fn drop(&mut self) {
-        self.close().unwrap();
-    }
-}
-
-     */
